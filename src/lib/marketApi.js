@@ -125,24 +125,31 @@ function normalizeHistory(payload = {}) {
     .filter((point) => Number.isFinite(point.timestamp) && Number.isFinite(point.open) && Number.isFinite(point.close))
 }
 
-export async function fetchMarketHistory(symbol, range = 'YTD', interval = '1D') {
+export async function fetchBrokerStatus() {
   try {
-    const payload = await requestJson(
-      `/api/market/history?symbol=${encodeURIComponent(symbol)}&range=${encodeURIComponent(RANGE_TO_LOOKBACK[range] || 'ytd')}&interval=${encodeURIComponent(INTERVAL_TO_API[interval] || 'day')}`,
-    )
-    const points = normalizeHistory(payload)
-    if (!points.length) {
-      throw new Error('No history points returned')
-    }
+    const payload = await requestJson('/api/zerodha/status')
     return {
-      source: payload?.source || 'live',
-      points,
+      connected: Boolean(payload?.connected),
+      configured: Boolean(payload?.configured),
+      source: 'backend',
     }
   } catch {
     return {
-      source: 'fallback',
-      points: fallbackSeries(symbol, interval),
+      connected: false,
+      configured: false,
+      source: 'unavailable',
     }
+  }
+}
+
+export async function fetchMarketHistory(symbol, range = 'YTD', interval = '1D') {
+  try {
+    const payload = await requestJson(`/api/market/history?symbol=${encodeURIComponent(symbol)}&range=${encodeURIComponent(RANGE_TO_LOOKBACK[range] || 'ytd')}&interval=${encodeURIComponent(INTERVAL_TO_API[interval] || 'day')}`)
+    const points = normalizeHistory(payload)
+    if (!points.length) throw new Error('No history points returned')
+    return { source: payload?.source || 'live', points }
+  } catch {
+    return { source: 'fallback', points: fallbackSeries(symbol, interval) }
   }
 }
 
@@ -171,9 +178,7 @@ export async function fetchMarketQuote(symbol) {
 export function searchSymbols(query) {
   const term = query.trim().toUpperCase()
   if (!term) return SYMBOL_CATALOG.slice(0, 8)
-  return SYMBOL_CATALOG
-    .filter((item) => item.symbol.includes(term) || item.name.toUpperCase().includes(term))
-    .slice(0, 8)
+  return SYMBOL_CATALOG.filter((item) => item.symbol.includes(term) || item.name.toUpperCase().includes(term)).slice(0, 8)
 }
 
 export function mergeWatchlistQuotes(watchlist, quotesBySymbol) {
