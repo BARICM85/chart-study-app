@@ -1,4 +1,5 @@
-const DEFAULT_API_BASE = import.meta.env.VITE_API_BASE_URL || ''
+const ONLINE_API_BASE = 'https://tickertap-backend-88ts.onrender.com'
+const DEFAULT_API_BASE = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? '' : ONLINE_API_BASE)
 
 const SYMBOL_CATALOG = [
   { symbol: 'MARUTI', name: 'Maruti Suzuki India' },
