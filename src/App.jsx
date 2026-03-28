@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bell,
-  CandlestickChart,
   ChartCandlestick,
   Crosshair,
   Gauge,
@@ -15,14 +14,15 @@ import {
   TrendingUp,
 } from 'lucide-react'
 import { dispose, init } from 'klinecharts'
+import { fetchMarketHistory, fetchMarketQuote, mergeWatchlistQuotes, searchSymbols } from './lib/marketApi'
 
-const WATCHLIST = [
-  { symbol: 'MARUTI', name: 'Maruti Suzuki', price: 12389, change: -2.08 },
-  { symbol: 'RELIANCE', name: 'Reliance Industries', price: 2952, change: 0.84 },
-  { symbol: 'TCS', name: 'Tata Consultancy', price: 4128, change: -0.52 },
-  { symbol: 'HDFCBANK', name: 'HDFC Bank', price: 1684, change: 1.12 },
-  { symbol: 'INFY', name: 'Infosys', price: 1738, change: -0.41 },
-  { symbol: 'SBIN', name: 'State Bank of India', price: 804, change: 0.66 },
+const BASE_WATCHLIST = [
+  { symbol: 'MARUTI', name: 'Maruti Suzuki India' },
+  { symbol: 'RELIANCE', name: 'Reliance Industries' },
+  { symbol: 'TCS', name: 'Tata Consultancy Services' },
+  { symbol: 'HDFCBANK', name: 'HDFC Bank' },
+  { symbol: 'INFY', name: 'Infosys' },
+  { symbol: 'SBIN', name: 'State Bank of India' },
 ]
 
 const INTERVALS = [
@@ -47,82 +47,36 @@ const TOOLS = [
   { label: 'Note', icon: Bell, action: 'simpleAnnotation' },
 ]
 
-function seedFromSymbol(symbol) {
-  return [...symbol].reduce((sum, char) => sum + char.charCodeAt(0), 0)
-}
-
-function intervalToMs(period) {
-  const base = {
-    minute: 60_000,
-    hour: 60 * 60_000,
-    day: 24 * 60 * 60_000,
-    week: 7 * 24 * 60 * 60_000,
-    month: 30 * 24 * 60 * 60_000,
-    year: 365 * 24 * 60 * 60_000,
-  }
-  return (base[period.type] || base.day) * period.span
-}
-
-function buildSeries(symbol, period, count = 320) {
-  const seed = seedFromSymbol(symbol)
-  const intervalMs = intervalToMs(period)
-  const now = Date.now()
-  const anchor = Math.floor(now / intervalMs) * intervalMs
-  const base = 900 + ((seed % 700) * 5)
-  let previousClose = base
-
-  return Array.from({ length: count }, (_, index) => {
-    const timestamp = anchor - ((count - index) * intervalMs)
-    const drift = Math.sin((index + seed) / 18) * (base * 0.015)
-    const wave = Math.cos((index + seed) / 7) * (base * 0.008)
-    const open = previousClose
-    const close = Math.max(10, open + drift + wave + (((seed % 13) - 6) * 0.12))
-    const high = Math.max(open, close) + Math.abs(Math.sin((seed + index) / 3.8) * (base * 0.01))
-    const low = Math.min(open, close) - Math.abs(Math.cos((seed + index) / 4.1) * (base * 0.01))
-    const volume = Math.round(120000 + ((seed * (index + 11)) % 650000))
-    previousClose = close
-    return {
-      timestamp,
-      open: Number(open.toFixed(2)),
-      high: Number(high.toFixed(2)),
-      low: Number(low.toFixed(2)),
-      close: Number(close.toFixed(2)),
-      volume,
-    }
-  })
-}
-
-function buildNextBar(lastBar, symbol, period) {
-  const seed = seedFromSymbol(symbol)
-  const intervalMs = intervalToMs(period)
-  const index = Math.floor(lastBar.timestamp / intervalMs)
-  const drift = Math.sin((index + seed) / 11) * (lastBar.close * 0.006)
-  const pulse = Math.cos((index + seed) / 5) * (lastBar.close * 0.0035)
-  const open = lastBar.close
-  const close = Math.max(10, open + drift + pulse)
-  const high = Math.max(open, close) + Math.abs(Math.sin((seed + index) / 2.7) * (lastBar.close * 0.004))
-  const low = Math.min(open, close) - Math.abs(Math.cos((seed + index) / 2.9) * (lastBar.close * 0.004))
-  return {
-    timestamp: lastBar.timestamp + intervalMs,
-    open: Number(open.toFixed(2)),
-    high: Number(high.toFixed(2)),
-    low: Number(low.toFixed(2)),
-    close: Number(close.toFixed(2)),
-    volume: Math.round(lastBar.volume * (0.82 + ((seed % 19) / 25))),
-  }
-}
-
 function formatPrice(value) {
-  return new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(value)
+  return new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(value || 0)
 }
 
-function StudyChart({ symbol, interval, selectedTool, onToolApplied }) {
+function sourceLabel(source) {
+  return source === 'fallback' ? 'Fallback feed' : source === 'zerodha' ? 'Zerodha live' : 'Live market'
+}
+
+function StudyChart({ symbol, interval, range, selectedTool, onToolApplied, onSeriesMeta }) {
   const containerRef = useRef(null)
   const chartRef = useRef(null)
   const streamRef = useRef(null)
-  const seriesCacheRef = useRef(new Map())
+  const symbolRef = useRef(symbol)
+  const intervalRef = useRef(interval)
+  const rangeRef = useRef(range)
+  const latestSeriesRef = useRef([])
 
   const symbolInfo = useMemo(() => ({ ticker: symbol, pricePrecision: 2, volumePrecision: 0 }), [symbol])
+
+  useEffect(() => {
+    symbolRef.current = symbol
+  }, [symbol])
+
+  useEffect(() => {
+    intervalRef.current = interval
+  }, [interval])
+
+  useEffect(() => {
+    rangeRef.current = range
+  }, [range])
 
   useEffect(() => {
     if (!containerRef.current) return undefined
@@ -209,22 +163,28 @@ function StudyChart({ symbol, interval, selectedTool, onToolApplied }) {
     chartRef.current = chart
 
     chart.setDataLoader({
-      getBars: ({ symbol: nextSymbol, period, callback }) => {
-        const key = `${nextSymbol.ticker}-${period.type}-${period.span}`
-        const existing = seriesCacheRef.current.get(key)
-        const data = existing || buildSeries(nextSymbol.ticker, period)
-        seriesCacheRef.current.set(key, data)
-        callback(data, false)
+      getBars: async ({ callback }) => {
+        const payload = await fetchMarketHistory(symbolRef.current, rangeRef.current, intervalRef.current.label)
+        latestSeriesRef.current = payload.points
+        callback(payload.points, false)
+        onSeriesMeta?.({ source: payload.source, bars: payload.points.length })
       },
-      subscribeBar: ({ symbol: nextSymbol, period, callback }) => {
-        const key = `${nextSymbol.ticker}-${period.type}-${period.span}`
-        const stream = window.setInterval(() => {
-          const current = seriesCacheRef.current.get(key) || buildSeries(nextSymbol.ticker, period)
-          const nextBar = buildNextBar(current[current.length - 1], nextSymbol.ticker, period)
-          const updated = [...current.slice(-319), nextBar]
-          seriesCacheRef.current.set(key, updated)
-          callback(nextBar)
-        }, 5000)
+      subscribeBar: ({ callback }) => {
+        const stream = window.setInterval(async () => {
+          const quote = await fetchMarketQuote(symbolRef.current)
+          const current = latestSeriesRef.current
+          if (!current.length) return
+          const lastBar = current[current.length - 1]
+          const updatedBar = {
+            ...lastBar,
+            high: Math.max(lastBar.high, quote.price),
+            low: Math.min(lastBar.low, quote.price),
+            close: Number(quote.price.toFixed(2)),
+          }
+          latestSeriesRef.current = [...current.slice(0, -1), updatedBar]
+          callback(updatedBar)
+          onSeriesMeta?.({ source: quote.source, bars: current.length, quote })
+        }, 10000)
         streamRef.current = stream
       },
       unsubscribeBar: () => {
@@ -255,46 +215,71 @@ function StudyChart({ symbol, interval, selectedTool, onToolApplied }) {
         chartRef.current = null
       }
     }
-  }, [])
+  }, [onSeriesMeta])
 
   useEffect(() => {
     if (!chartRef.current) return
+    chartRef.current.resetData()
     chartRef.current.setSymbol(symbolInfo)
-  }, [symbolInfo])
-
-  useEffect(() => {
-    if (!chartRef.current) return
     chartRef.current.setPeriod(interval.period)
     chartRef.current.scrollToRealTime()
-  }, [interval])
+  }, [symbolInfo, interval, range])
 
   useEffect(() => {
     if (!chartRef.current || !selectedTool || selectedTool === 'crosshair') return
     chartRef.current.createOverlay(selectedTool)
-    onToolApplied?.(selectedTool)
+    onToolApplied?.('crosshair')
   }, [selectedTool, onToolApplied])
 
   return <div ref={containerRef} className="chart-canvas" />
 }
 
 function App() {
-  const [selectedSymbol, setSelectedSymbol] = useState(WATCHLIST[0])
+  const [watchlist, setWatchlist] = useState(BASE_WATCHLIST.map((item) => ({ ...item, price: 0, change: 0, source: 'fallback' })))
+  const [selectedSymbol, setSelectedSymbol] = useState(BASE_WATCHLIST[0])
   const [interval, setInterval] = useState(INTERVALS[5])
+  const [range, setRange] = useState('YTD')
   const [selectedTool, setSelectedTool] = useState('crosshair')
-  const [searchValue, setSearchValue] = useState(WATCHLIST[0].symbol)
+  const [searchValue, setSearchValue] = useState(BASE_WATCHLIST[0].symbol)
+  const [seriesMeta, setSeriesMeta] = useState({ source: 'fallback', bars: 0, quote: null })
+
+  const suggestions = useMemo(() => searchSymbols(searchValue), [searchValue])
+
+  useEffect(() => {
+    let mounted = true
+
+    const refreshQuotes = async () => {
+      const quotes = await Promise.all(BASE_WATCHLIST.map((item) => fetchMarketQuote(item.symbol)))
+      if (!mounted) return
+      const quoteMap = Object.fromEntries(quotes.map((quote) => [quote.symbol, quote]))
+      setWatchlist(mergeWatchlistQuotes(BASE_WATCHLIST, quoteMap))
+    }
+
+    refreshQuotes()
+    const timer = window.setInterval(refreshQuotes, 20000)
+    return () => {
+      mounted = false
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  const selectedWatchItem = useMemo(
+    () => watchlist.find((item) => item.symbol === selectedSymbol.symbol) || selectedSymbol,
+    [selectedSymbol, watchlist],
+  )
 
   const headerStats = useMemo(() => {
-    const base = selectedSymbol.price
-    const change = selectedSymbol.change
+    const base = selectedWatchItem.price || 0
+    const change = selectedWatchItem.change || 0
     return {
       last: base,
       change,
-      open: base * 1.006,
-      high: base * 1.017,
-      low: base * 0.992,
+      open: base ? base * 1.004 : 0,
+      high: base ? base * 1.013 : 0,
+      low: base ? base * 0.991 : 0,
       close: base,
     }
-  }, [selectedSymbol])
+  }, [selectedWatchItem])
 
   const studies = ['MA 20/50/200', 'EMA 9/21', 'Bollinger', 'MACD', 'RSI', 'Volume']
 
@@ -310,7 +295,7 @@ function App() {
         </div>
         <div className="header-actions">
           <button className="ghost-btn"><Settings2 size={16} /> Layout</button>
-          <button className="primary-btn"><Plus size={16} /> Zerodha adapter next</button>
+          <button className="primary-btn"><Plus size={16} /> Zerodha adapter in progress</button>
         </div>
       </header>
 
@@ -336,20 +321,33 @@ function App() {
         <main className="chart-workspace">
           <section className="workspace-toolbar">
             <div className="toolbar-row">
-              <div className="symbol-box">
-                <Search size={16} />
-                <input
-                  value={searchValue}
-                  onChange={(event) => setSearchValue(event.target.value.toUpperCase())}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      const found = WATCHLIST.find((item) => item.symbol === searchValue.toUpperCase())
-                      if (found) setSelectedSymbol(found)
-                    }
-                  }}
-                  placeholder="Search symbol"
-                />
+              <div className="search-stack">
+                <div className="symbol-box">
+                  <Search size={16} />
+                  <input
+                    value={searchValue}
+                    onChange={(event) => setSearchValue(event.target.value.toUpperCase())}
+                    placeholder="Search symbol"
+                  />
+                </div>
+                <div className="suggestions-box">
+                  {suggestions.map((item) => (
+                    <button
+                      key={item.symbol}
+                      type="button"
+                      className="suggestion-row"
+                      onClick={() => {
+                        setSelectedSymbol(item)
+                        setSearchValue(item.symbol)
+                      }}
+                    >
+                      <strong>{item.symbol}</strong>
+                      <span>{item.name}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
+
               <button className="chip">NSE</button>
               <div className="chip-group compact">
                 {INTERVALS.map((item) => (
@@ -375,17 +373,32 @@ function App() {
                 <span className={headerStats.change >= 0 ? 'up' : 'down'}>
                   {headerStats.change >= 0 ? '+' : ''}{headerStats.change.toFixed(2)}%
                 </span>
+                <span className="feed-badge">{sourceLabel(seriesMeta.quote?.source || seriesMeta.source)}</span>
               </div>
               <div className="chip-group">
-                {RANGE_BUTTONS.map((range) => (
-                  <button key={range} type="button" className="chip subtle">{range}</button>
+                {RANGE_BUTTONS.map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    className={`chip subtle ${range === item ? 'selected' : ''}`}
+                    onClick={() => setRange(item)}
+                  >
+                    {item}
+                  </button>
                 ))}
               </div>
             </div>
           </section>
 
           <section className="chart-card">
-            <StudyChart symbol={selectedSymbol.symbol} interval={interval} selectedTool={selectedTool} onToolApplied={setSelectedTool} />
+            <StudyChart
+              symbol={selectedSymbol.symbol}
+              interval={interval}
+              range={range}
+              selectedTool={selectedTool}
+              onToolApplied={setSelectedTool}
+              onSeriesMeta={setSeriesMeta}
+            />
           </section>
 
           <section className="study-footer">
@@ -411,13 +424,13 @@ function App() {
         <aside className="right-panel">
           <section className="panel-card focus-card">
             <div className="panel-title-row">
-              <h2>{selectedSymbol.symbol}</h2>
-              <span className="pill">Mock live feed</span>
+              <h2>{selectedWatchItem.symbol}</h2>
+              <span className="pill">{sourceLabel(selectedWatchItem.source)}</span>
             </div>
             <p className="company-name">{selectedSymbol.name}</p>
-            <p className="price-print">{formatPrice(selectedSymbol.price)} <span>INR</span></p>
-            <p className={`move-print ${selectedSymbol.change >= 0 ? 'up' : 'down'}`}>
-              {selectedSymbol.change >= 0 ? '+' : ''}{selectedSymbol.change.toFixed(2)}%
+            <p className="price-print">{formatPrice(selectedWatchItem.price)} <span>INR</span></p>
+            <p className={`move-print ${selectedWatchItem.change >= 0 ? 'up' : 'down'}`}>
+              {selectedWatchItem.change >= 0 ? '+' : ''}{selectedWatchItem.change.toFixed(2)}%
             </p>
           </section>
 
@@ -427,11 +440,11 @@ function App() {
               <button className="icon-btn"><LayoutPanelLeft size={16} /></button>
             </div>
             <div className="watchlist">
-              {WATCHLIST.map((item) => (
+              {watchlist.map((item) => (
                 <button
                   key={item.symbol}
                   type="button"
-                  className={`watch-row ${selectedSymbol.symbol === item.symbol ? 'active' : ''}`}
+                  className={`watch-row ${selectedWatchItem.symbol === item.symbol ? 'active' : ''}`}
                   onClick={() => {
                     setSelectedSymbol(item)
                     setSearchValue(item.symbol)
@@ -459,10 +472,10 @@ function App() {
             </div>
             <ul className="study-list">
               <li>KLineChart engine</li>
-              <li>Candles with built-in MA, EMA, BOLL</li>
+              <li>Live-ready history endpoint integration</li>
+              <li>Quote polling for current price refresh</li>
               <li>Separate VOL, MACD, RSI panes</li>
               <li>Overlay tools via built-in shapes</li>
-              <li>Dark trading desk theme ready for broker data</li>
             </ul>
           </section>
         </aside>
