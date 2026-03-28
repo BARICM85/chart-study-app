@@ -4,7 +4,6 @@ import {
   ChartCandlestick,
   Crosshair,
   Gauge,
-  LayoutPanelLeft,
   PencilLine,
   Plus,
   Radar,
@@ -23,6 +22,8 @@ const BASE_WATCHLIST = [
   { symbol: 'HDFCBANK', name: 'HDFC Bank' },
   { symbol: 'INFY', name: 'Infosys' },
   { symbol: 'SBIN', name: 'State Bank of India' },
+  { symbol: 'ICICIBANK', name: 'ICICI Bank' },
+  { symbol: 'LT', name: 'Larsen & Toubro' },
 ]
 
 const INTERVALS = [
@@ -87,7 +88,7 @@ function StudyChart({ symbol, interval, range, selectedTool, onToolApplied, onSe
       zoomAnchor: 'last_bar',
       layout: [
         { type: 'candle', options: { id: 'main', dragEnabled: true } },
-        { type: 'indicator', content: ['VOL'], options: { id: 'volume', height: 90, minHeight: 70 } },
+        { type: 'indicator', content: ['VOL'], options: { id: 'volume', height: 100, minHeight: 70 } },
         { type: 'indicator', content: ['MACD'], options: { id: 'macd', height: 120, minHeight: 90 } },
         { type: 'indicator', content: ['RSI'], options: { id: 'rsi', height: 110, minHeight: 90 } },
         { type: 'xAxis' },
@@ -197,9 +198,8 @@ function StudyChart({ symbol, interval, range, selectedTool, onToolApplied, onSe
 
     chart.setSymbol(symbolInfo)
     chart.setPeriod(interval.period)
-    chart.createIndicator({ name: 'MA', calcParams: [20, 50, 200] })
-    chart.createIndicator({ name: 'EMA', calcParams: [9, 21] })
-    chart.createIndicator('BOLL')
+    chart.createIndicator({ name: 'MA', calcParams: [20, 50, 200] }, false, { id: 'main' })
+    chart.createIndicator('BOLL', false, { id: 'main' })
 
     const handleResize = () => chart.resize()
     window.addEventListener('resize', handleResize)
@@ -281,11 +281,9 @@ function App() {
     }
   }, [selectedWatchItem])
 
-  const studies = ['MA 20/50/200', 'EMA 9/21', 'Bollinger', 'MACD', 'RSI', 'Volume']
-
   return (
     <div className="study-app-shell">
-      <header className="top-shell">
+      <header className="top-shell compact">
         <div className="brand-strip">
           <div className="brand-mark"><ChartCandlestick size={18} /></div>
           <div>
@@ -299,7 +297,33 @@ function App() {
         </div>
       </header>
 
-      <div className="workspace-grid">
+      <div className="watch-strip-card">
+        <div className="watch-strip-header">
+          <span className="eyebrow">Watchlist</span>
+          <span className="feed-mini">{sourceLabel(selectedWatchItem.source)}</span>
+        </div>
+        <div className="watch-strip-scroll">
+          {watchlist.map((item) => (
+            <button
+              key={item.symbol}
+              type="button"
+              className={`watch-chip ${selectedWatchItem.symbol === item.symbol ? 'active' : ''}`}
+              onClick={() => {
+                setSelectedSymbol(item)
+                setSearchValue(item.symbol)
+              }}
+            >
+              <strong>{item.symbol}</strong>
+              <span>{formatPrice(item.price)}</span>
+              <em className={item.change >= 0 ? 'up' : 'down'}>
+                {item.change >= 0 ? '+' : ''}{item.change.toFixed(2)}%
+              </em>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="workspace-grid simpler">
         <aside className="left-rail">
           {TOOLS.map((tool) => {
             const Icon = tool.icon
@@ -318,37 +342,39 @@ function App() {
           })}
         </aside>
 
-        <main className="chart-workspace">
-          <section className="workspace-toolbar">
+        <main className="chart-workspace wide">
+          <section className="workspace-toolbar compact">
             <div className="toolbar-row">
-              <div className="search-stack">
-                <div className="symbol-box">
-                  <Search size={16} />
-                  <input
-                    value={searchValue}
-                    onChange={(event) => setSearchValue(event.target.value.toUpperCase())}
-                    placeholder="Search symbol"
-                  />
+              <div className="toolbar-left-cluster">
+                <div className="search-stack slim">
+                  <div className="symbol-box compact">
+                    <Search size={16} />
+                    <input
+                      value={searchValue}
+                      onChange={(event) => setSearchValue(event.target.value.toUpperCase())}
+                      placeholder="Search symbol"
+                    />
+                  </div>
+                  <div className="suggestions-box compact">
+                    {suggestions.map((item) => (
+                      <button
+                        key={item.symbol}
+                        type="button"
+                        className="suggestion-row"
+                        onClick={() => {
+                          setSelectedSymbol(item)
+                          setSearchValue(item.symbol)
+                        }}
+                      >
+                        <strong>{item.symbol}</strong>
+                        <span>{item.name}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <div className="suggestions-box">
-                  {suggestions.map((item) => (
-                    <button
-                      key={item.symbol}
-                      type="button"
-                      className="suggestion-row"
-                      onClick={() => {
-                        setSelectedSymbol(item)
-                        setSearchValue(item.symbol)
-                      }}
-                    >
-                      <strong>{item.symbol}</strong>
-                      <span>{item.name}</span>
-                    </button>
-                  ))}
-                </div>
+                <button className="chip">NSE</button>
               </div>
 
-              <button className="chip">NSE</button>
               <div className="chip-group compact">
                 {INTERVALS.map((item) => (
                   <button
@@ -363,8 +389,8 @@ function App() {
               </div>
             </div>
 
-            <div className="toolbar-row secondary">
-              <div className="stats-line">
+            <div className="toolbar-row secondary compact">
+              <div className="stats-line compact">
                 <span className="symbol-title">{selectedSymbol.symbol}</span>
                 <span>O {formatPrice(headerStats.open)}</span>
                 <span>H {formatPrice(headerStats.high)}</span>
@@ -390,7 +416,7 @@ function App() {
             </div>
           </section>
 
-          <section className="chart-card">
+          <section className="chart-card clean">
             <StudyChart
               symbol={selectedSymbol.symbol}
               interval={interval}
@@ -400,29 +426,10 @@ function App() {
               onSeriesMeta={setSeriesMeta}
             />
           </section>
-
-          <section className="study-footer">
-            <div className="footer-block">
-              <p className="footer-label">Built-in studies</p>
-              <div className="study-tags">
-                {studies.map((study) => <span key={study}>{study}</span>)}
-              </div>
-            </div>
-            <div className="footer-block">
-              <p className="footer-label">Drawing overlays</p>
-              <div className="study-tags muted">
-                <span>Straight line</span>
-                <span>Ray line</span>
-                <span>Horizontal line</span>
-                <span>Price line</span>
-                <span>Annotation</span>
-              </div>
-            </div>
-          </section>
         </main>
 
-        <aside className="right-panel">
-          <section className="panel-card focus-card">
+        <aside className="right-panel compact-only">
+          <section className="panel-card focus-card slim">
             <div className="panel-title-row">
               <h2>{selectedWatchItem.symbol}</h2>
               <span className="pill">{sourceLabel(selectedWatchItem.source)}</span>
@@ -432,50 +439,10 @@ function App() {
             <p className={`move-print ${selectedWatchItem.change >= 0 ? 'up' : 'down'}`}>
               {selectedWatchItem.change >= 0 ? '+' : ''}{selectedWatchItem.change.toFixed(2)}%
             </p>
-          </section>
-
-          <section className="panel-card">
-            <div className="panel-title-row">
-              <h3>Watchlist</h3>
-              <button className="icon-btn"><LayoutPanelLeft size={16} /></button>
-            </div>
-            <div className="watchlist">
-              {watchlist.map((item) => (
-                <button
-                  key={item.symbol}
-                  type="button"
-                  className={`watch-row ${selectedWatchItem.symbol === item.symbol ? 'active' : ''}`}
-                  onClick={() => {
-                    setSelectedSymbol(item)
-                    setSearchValue(item.symbol)
-                  }}
-                >
-                  <div>
-                    <p>{item.symbol}</p>
-                    <span>{item.name}</span>
-                  </div>
-                  <div className="watch-metrics">
-                    <strong>{formatPrice(item.price)}</strong>
-                    <span className={item.change >= 0 ? 'up' : 'down'}>
-                      {item.change >= 0 ? '+' : ''}{item.change.toFixed(2)}%
-                    </span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="panel-card">
-            <div className="panel-title-row">
-              <h3>Study stack</h3>
-              <button className="icon-btn"><Radar size={16} /></button>
-            </div>
-            <ul className="study-list">
-              <li>KLineChart engine</li>
-              <li>Live-ready history endpoint integration</li>
-              <li>Quote polling for current price refresh</li>
-              <li>Separate VOL, MACD, RSI panes</li>
-              <li>Overlay tools via built-in shapes</li>
+            <ul className="study-list compact">
+              <li>MA 20/50/200 and Bollinger on main chart</li>
+              <li>Separate Volume, MACD, RSI panes only</li>
+              <li>Overlay tools from left rail</li>
             </ul>
           </section>
         </aside>
