@@ -1,4 +1,4 @@
-const ONLINE_API_BASE = 'https://tickertap-backend-88ts.onrender.com'
+﻿const ONLINE_API_BASE = 'https://tickertap-backend-88ts.onrender.com'
 const DEFAULT_API_BASE = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? '' : ONLINE_API_BASE)
 
 const SYMBOL_CATALOG = [
@@ -106,6 +106,26 @@ async function requestJson(path) {
   return data
 }
 
+function resolveTimestamp(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value < 1_000_000_000_000 ? value * 1000 : value
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const asNumber = Number(value)
+    if (Number.isFinite(asNumber)) {
+      return asNumber < 1_000_000_000_000 ? asNumber * 1000 : asNumber
+    }
+
+    const parsed = Date.parse(value)
+    if (Number.isFinite(parsed)) {
+      return parsed
+    }
+  }
+
+  return NaN
+}
+
 function normalizeHistory(payload = {}) {
   const points = Array.isArray(payload?.points)
     ? payload.points
@@ -115,7 +135,7 @@ function normalizeHistory(payload = {}) {
 
   return points
     .map((point) => ({
-      timestamp: Number(point.timestamp || point.date || point.time || 0),
+      timestamp: resolveTimestamp(point.timestamp ?? point.date ?? point.time),
       open: Number(point.open),
       high: Number(point.high),
       low: Number(point.low),
@@ -192,3 +212,5 @@ export function mergeWatchlistQuotes(watchlist, quotesBySymbol) {
     }
   })
 }
+
+
