@@ -1,21 +1,19 @@
 ﻿const ONLINE_API_BASE = 'https://tickertap-backend-88ts.onrender.com'
 const DEFAULT_API_BASE = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? '' : ONLINE_API_BASE)
 
-const SYMBOL_CATALOG = [
-  { symbol: 'MARUTI', name: 'Maruti Suzuki India' },
-  { symbol: 'RELIANCE', name: 'Reliance Industries' },
-  { symbol: 'TCS', name: 'Tata Consultancy Services' },
-  { symbol: 'INFY', name: 'Infosys' },
-  { symbol: 'HDFCBANK', name: 'HDFC Bank' },
-  { symbol: 'ICICIBANK', name: 'ICICI Bank' },
-  { symbol: 'SBIN', name: 'State Bank of India' },
-  { symbol: 'LT', name: 'Larsen & Toubro' },
-  { symbol: 'BHARTIARTL', name: 'Bharti Airtel' },
-  { symbol: 'ITC', name: 'ITC' },
-  { symbol: 'AXISBANK', name: 'Axis Bank' },
-  { symbol: 'KOTAKBANK', name: 'Kotak Mahindra Bank' },
-  { symbol: 'BAJFINANCE', name: 'Bajaj Finance' },
-  { symbol: 'SUNPHARMA', name: 'Sun Pharma' },
+const FALLBACK_SYMBOL_CATALOG = [
+  { symbol: 'MARUTI', name: 'Maruti Suzuki India', exchange: 'NSE', type: 'stock' },
+  { symbol: 'RELIANCE', name: 'Reliance Industries', exchange: 'NSE', type: 'stock' },
+  { symbol: 'TCS', name: 'Tata Consultancy Services', exchange: 'NSE', type: 'stock' },
+  { symbol: 'HDFCBANK', name: 'HDFC Bank', exchange: 'NSE', type: 'stock' },
+  { symbol: 'INFY', name: 'Infosys', exchange: 'NSE', type: 'stock' },
+  { symbol: 'SBIN', name: 'State Bank of India', exchange: 'NSE', type: 'stock' },
+  { symbol: 'ICICIBANK', name: 'ICICI Bank', exchange: 'NSE', type: 'stock' },
+  { symbol: 'LT', name: 'Larsen & Toubro', exchange: 'NSE', type: 'stock' },
+  { symbol: '^NSEI', name: 'NIFTY 50', exchange: 'INDEX', type: 'index' },
+  { symbol: '^NSEBANK', name: 'BANK NIFTY', exchange: 'INDEX', type: 'index' },
+  { symbol: '^BSESN', name: 'SENSEX', exchange: 'INDEX', type: 'index' },
+  { symbol: '^CNXIT', name: 'NIFTY IT', exchange: 'INDEX', type: 'index' },
 ]
 
 export const RANGE_TO_LOOKBACK = {
@@ -34,10 +32,10 @@ export const INTERVAL_TO_API = {
   '5m': '5minute',
   '15m': '15minute',
   '1H': '60minute',
-  '4H': '3hour',
+  '4H': '60minute',
   '1D': 'day',
-  '1W': 'week',
-  '1M': 'month',
+  '1W': 'day',
+  '1M': 'day',
 }
 
 function trimSlash(value = '') {
@@ -58,11 +56,11 @@ function intervalToMs(interval) {
     '1m': 60_000,
     '5m': 5 * 60_000,
     '15m': 15 * 60_000,
-    '1H': 60 * 60_000,
-    '4H': 4 * 60 * 60_000,
-    '1D': 24 * 60 * 60_000,
-    '1W': 7 * 24 * 60 * 60_000,
-    '1M': 30 * 24 * 60 * 60_000,
+    '1H': 60 * 60 * 1000,
+    '4H': 4 * 60 * 60 * 1000,
+    '1D': 24 * 60 * 60 * 1000,
+    '1W': 7 * 24 * 60 * 60 * 1000,
+    '1M': 30 * 24 * 60 * 60 * 1000,
   }
   return intervals[interval] || intervals['1D']
 }
@@ -145,6 +143,14 @@ function normalizeHistory(payload = {}) {
     .filter((point) => Number.isFinite(point.timestamp) && Number.isFinite(point.open) && Number.isFinite(point.close))
 }
 
+function fallbackSymbolSearch(query) {
+  const term = query.trim().toUpperCase()
+  if (!term) return FALLBACK_SYMBOL_CATALOG.slice(0, 12)
+  return FALLBACK_SYMBOL_CATALOG
+    .filter((item) => `${item.symbol} ${item.name}`.toUpperCase().includes(term))
+    .slice(0, 12)
+}
+
 export async function fetchBrokerStatus() {
   try {
     const payload = await requestJson('/api/zerodha/status')
@@ -195,10 +201,17 @@ export async function fetchMarketQuote(symbol) {
   }
 }
 
-export function searchSymbols(query) {
-  const term = query.trim().toUpperCase()
-  if (!term) return SYMBOL_CATALOG.slice(0, 8)
-  return SYMBOL_CATALOG.filter((item) => item.symbol.includes(term) || item.name.toUpperCase().includes(term)).slice(0, 8)
+export async function searchSymbols(query, limit = 12) {
+  const term = query.trim()
+  try {
+    const payload = await requestJson(`/api/market/search?q=${encodeURIComponent(term)}&limit=${encodeURIComponent(limit)}`)
+    if (Array.isArray(payload?.items) && payload.items.length) {
+      return payload.items
+    }
+  } catch {
+    // fall through to fallback symbol catalog
+  }
+  return fallbackSymbolSearch(term)
 }
 
 export function mergeWatchlistQuotes(watchlist, quotesBySymbol) {
@@ -212,5 +225,3 @@ export function mergeWatchlistQuotes(watchlist, quotesBySymbol) {
     }
   })
 }
-
-
