@@ -7,7 +7,6 @@ import {
   Maximize2,
   Minimize2,
   PencilLine,
-  Plus,
   Search,
   Settings2,
   Shapes,
@@ -16,14 +15,9 @@ import {
   X,
 } from 'lucide-react'
 import { dispose, init } from 'klinecharts'
-import { fetchBrokerStatus, fetchMarketHistory, fetchMarketQuote, mergeWatchlistQuotes, searchSymbols } from './lib/marketApi'
+import { fetchBrokerStatus, fetchMarketHistory, fetchMarketQuote, searchSymbols } from './lib/marketApi'
 
-const INITIAL_WATCHLIST = [
-  { symbol: 'MARUTI', name: 'Maruti Suzuki India', exchange: 'NSE' },
-  { symbol: 'RELIANCE', name: 'Reliance Industries', exchange: 'NSE' },
-  { symbol: 'TCS', name: 'Tata Consultancy Services', exchange: 'NSE' },
-  { symbol: 'HDFCBANK', name: 'HDFC Bank', exchange: 'NSE' },
-]
+const DEFAULT_SYMBOL = { symbol: '^NSEI', name: 'NIFTY 50', exchange: 'INDEX', type: 'index' }
 
 const INTERVALS = [
   { label: '1m', period: { type: 'minute', span: 1 } },
@@ -53,13 +47,18 @@ const TOOLS = [
 ]
 
 function formatPrice(value) {
-  return new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(value || 0)
+  return new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(Number.isFinite(value) ? value : 0)
+}
+
+function formatChange(value) {
+  const safe = Number.isFinite(value) ? value : 0
+  return `${safe >= 0 ? '+' : ''}${safe.toFixed(2)}%`
 }
 
 function sourceLabel(source) {
   if (source === 'fallback') return 'Fallback feed'
   if (source === 'zerodha') return 'Zerodha live'
-  if (source === 'yahoo') return 'Market fallback'
+  if (source === 'yahoo') return 'Last trading day'
   return 'Live market'
 }
 
@@ -228,15 +227,15 @@ function StudyChart({ symbol, interval, range, selectedTool, onToolApplied, onSe
 }
 
 function App() {
-  const [watchlist, setWatchlist] = useState(INITIAL_WATCHLIST.map((item) => ({ ...item, price: 0, change: 0, source: 'fallback' })))
-  const [selectedSymbol, setSelectedSymbol] = useState(INITIAL_WATCHLIST[0])
+  const [selectedSymbol, setSelectedSymbol] = useState(DEFAULT_SYMBOL)
   const [interval, setInterval] = useState(INTERVALS[5])
   const [range, setRange] = useState('YTD')
   const [chartType, setChartType] = useState('candle_stroke')
   const [selectedTool, setSelectedTool] = useState('crosshair')
-  const [searchValue, setSearchValue] = useState(INITIAL_WATCHLIST[0].symbol)
+  const [searchValue, setSearchValue] = useState(DEFAULT_SYMBOL.symbol)
   const [showSearchSuggestions, setShowSearchSuggestions] = useState(false)
-  const [searchSuggestions, setSearchSuggestions] = useState(INITIAL_WATCHLIST)
+  const [searchSuggestions, setSearchSuggestions] = useState([DEFAULT_SYMBOL])
+  const [selectedQuote, setSelectedQuote] = useState({ price: 0, changePercent: 0, source: 'fallback' })
   const [seriesMeta, setSeriesMeta] = useState({ source: 'fallback', bars: 0, quote: null, lastBar: null })
   const [brokerStatus, setBrokerStatus] = useState({ connected: false, configured: false })
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -260,11 +259,9 @@ function App() {
   useEffect(() => {
     let mounted = true
 
-    const refreshQuotes = async () => {
-      const quotes = await Promise.all(watchlist.map((item) => fetchMarketQuote(item.symbol)))
-      if (!mounted) return
-      const quoteMap = Object.fromEntries(quotes.map((quote) => [quote.symbol, quote]))
-      setWatchlist((current) => mergeWatchlistQuotes(current, quoteMap))
+    const refreshSelectedQuote = async () => {
+      const quote = await fetchMarketQuote(selectedSymbol.symbol)
+      if (mounted) setSelectedQuote(quote)
     }
 
     const refreshBroker = async () => {
@@ -272,10 +269,10 @@ function App() {
       if (mounted) setBrokerStatus(status)
     }
 
-    refreshQuotes()
+    refreshSelectedQuote()
     refreshBroker()
 
-    const quoteTimer = window.setInterval(refreshQuotes, 20000)
+    const quoteTimer = window.setInterval(refreshSelectedQuote, 20000)
     const brokerTimer = window.setInterval(refreshBroker, 30000)
 
     return () => {
@@ -283,7 +280,7 @@ function App() {
       window.clearInterval(quoteTimer)
       window.clearInterval(brokerTimer)
     }
-  }, [watchlist.length])
+  }, [selectedSymbol.symbol])
 
   useEffect(() => {
     const handleKey = (event) => {
@@ -293,30 +290,19 @@ function App() {
     return () => window.removeEventListener('keydown', handleKey)
   }, [])
 
-  const selectedWatchItem = useMemo(() => {
-    return watchlist.find((item) => item.symbol === selectedSymbol.symbol) || selectedSymbol
-  }, [selectedSymbol, watchlist])
-
   const headerStats = useMemo(() => {
     const baseBar = seriesMeta.lastBar
-    const basePrice = selectedWatchItem.price || 0
+    const basePrice = Number.isFinite(selectedQuote.price) ? selectedQuote.price : 0
     return {
       open: baseBar?.open ?? basePrice,
       high: baseBar?.high ?? basePrice,
       low: baseBar?.low ?? basePrice,
       close: baseBar?.close ?? basePrice,
-      change: selectedWatchItem.change || 0,
+      change: Number.isFinite(selectedQuote.changePercent) ? selectedQuote.changePercent : 0,
     }
-  }, [seriesMeta.lastBar, selectedWatchItem])
+  }, [seriesMeta.lastBar, selectedQuote])
 
-  const addSelectedToWatchlist = () => {
-    setWatchlist((current) => {
-      if (current.some((item) => item.symbol === selectedSymbol.symbol)) return current
-      const nextItem = { symbol: selectedSymbol.symbol, name: selectedSymbol.name, exchange: selectedSymbol.exchange || 'NSE', price: 0, change: 0, source: 'fallback' }
-      if (current.length < 4) return [...current, nextItem]
-      return [...current.slice(0, 3), nextItem]
-    })
-  }
+  const liveBadge = sourceLabel(seriesMeta.quote?.source || selectedQuote.source || seriesMeta.source)
 
   const content = (
     <div className={`workspace-grid ${isFullscreen ? 'fullscreen' : ''}`}>
@@ -340,15 +326,15 @@ function App() {
 
       <main className="chart-workspace wide">
         <section className="workspace-toolbar compact">
-          <div className="toolbar-row top-row">
-            <div className="search-stack in-flow narrow">
-              <div className="symbol-box">
+          <div className="toolbar-row top-row single-header-row">
+            <div className="search-stack in-flow wide-search">
+              <div className="symbol-box wide-search-box">
                 <Search size={16} />
                 <input
                   value={searchValue}
                   onFocus={() => setShowSearchSuggestions(true)}
                   onChange={(event) => setSearchValue(event.target.value.toUpperCase())}
-                  placeholder="Search NSE stock or index"
+                  placeholder="Search all NSE stocks and indices"
                 />
               </div>
               {showSearchSuggestions ? (
@@ -378,42 +364,13 @@ function App() {
               ) : null}
             </div>
 
-            <div className="watch-compact">
-              <div className="watch-compact-header">
-                <span className="eyebrow">Watchlist 1-4</span>
-                <button type="button" className="chip subtle" onClick={addSelectedToWatchlist}>
-                  <Plus size={14} /> Add selected
-                </button>
-              </div>
-              <div className="watch-compact-scroll">
-                {watchlist.map((item) => (
-                  <button
-                    key={item.symbol}
-                    type="button"
-                    className={`watch-chip mini ${selectedWatchItem.symbol === item.symbol ? 'active' : ''}`}
-                    onClick={() => {
-                      setSelectedSymbol(item)
-                      setSearchValue(item.symbol)
-                    }}
-                  >
-                    <strong>{item.symbol}</strong>
-                    <span>{formatPrice(item.price)}</span>
-                    <em className={item.change >= 0 ? 'up' : 'down'}>{item.change >= 0 ? '+' : ''}{item.change.toFixed(2)}%</em>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="summary-compact-card">
-              <div className="summary-title-row">
-                <strong>{selectedWatchItem.symbol}</strong>
-                <span className={`feed-badge ${brokerStatus.connected ? 'good' : 'warn'}`}>{brokerStatus.connected ? 'ZERODHA' : 'STANDBY'}</span>
-              </div>
-              <span className="summary-name">{selectedSymbol.name}</span>
-              <div className="summary-price-row">
-                <span className="summary-price">{formatPrice(selectedWatchItem.price)}</span>
-                <span className={selectedWatchItem.change >= 0 ? 'up' : 'down'}>{selectedWatchItem.change >= 0 ? '+' : ''}{selectedWatchItem.change.toFixed(2)}%</span>
-              </div>
+            <div className="summary-inline-card">
+              <strong>{selectedSymbol.symbol}</strong>
+              <span>{selectedSymbol.name}</span>
+              <span>{formatPrice(selectedQuote.price)} INR</span>
+              <span className={headerStats.change >= 0 ? 'up' : 'down'}>{formatChange(headerStats.change)}</span>
+              <span className={`feed-badge ${brokerStatus.connected ? 'good' : 'warn'}`}>{brokerStatus.connected ? 'ZERODHA CONNECTED' : 'ZERODHA STANDBY'}</span>
+              <span className="feed-badge">{liveBadge}</span>
             </div>
           </div>
 
@@ -424,8 +381,7 @@ function App() {
               <span>H {formatPrice(headerStats.high)}</span>
               <span>L {formatPrice(headerStats.low)}</span>
               <span>C {formatPrice(headerStats.close)}</span>
-              <span className={headerStats.change >= 0 ? 'up' : 'down'}>{headerStats.change >= 0 ? '+' : ''}{headerStats.change.toFixed(2)}%</span>
-              <span className="feed-badge">{sourceLabel(seriesMeta.quote?.source || seriesMeta.source)}</span>
+              <span className={headerStats.change >= 0 ? 'up' : 'down'}>{formatChange(headerStats.change)}</span>
               <span className="feed-badge neutral">Bars {seriesMeta.bars || 0}</span>
             </div>
           </div>
